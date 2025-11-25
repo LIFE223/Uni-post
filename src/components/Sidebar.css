@@ -72,6 +72,14 @@
   font-weight: 500;
 }
 
+.sidebar-community-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-right: 8px;
+}
+
 .footer-links {
   text-align: center;
 }

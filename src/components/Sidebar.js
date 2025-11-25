@@ -31,7 +31,11 @@ function Sidebar({ communities = [] }) {
                 <li key={community.name} className="community-item">
                   <span className="community-rank">{index + 1}</span>
                   <Link to={`/r/${community.name}`} className="community-link">
-                    <span className="community-icon">🏠</span>
+                    {community.iconUrl ? (
+                      <img src={community.iconUrl} alt="" className="sidebar-community-icon" />
+                    ) : (
+                      <span className="community-icon">🏠</span>
+                    )}
                     <span className="community-name">r/{community.name}</span>
                   </Link>
                 </li>
@@ -44,7 +48,7 @@ function Sidebar({ communities = [] }) {
       <div className="sidebar-card card">
         <div className="sidebar-content footer-links">
           <p>© 2025 Uni-post by Sirco</p>
-          <p>All rights reserved</p>
+          <p>The Open Data Social Platform</p>
         </div>
       </div>
     </aside>
