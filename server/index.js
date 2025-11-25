@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const rateLimit = require('express-rate-limit');
 const { Octokit } = require('@octokit/rest');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
@@ -16,12 +17,40 @@ const GITHUB_REPO = process.env.GITHUB_REPO;
 const GITHUB_BRANCH = process.env.GITHUB_BRANCH || 'main';
 const DATA_PATH = process.env.DATA_PATH || 'data';
 
+// Validate required environment variables
+const requiredEnvVars = ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO'];
+const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+if (missingVars.length > 0) {
+  console.error(`Error: Missing required environment variables: ${missingVars.join(', ')}`);
+  console.error('Please check your .env file. See .env.example for required variables.');
+  process.exit(1);
+}
+
 // Initialize Octokit
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
+
+// Rate limiting configuration
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per window
+  message: { error: 'Too many requests, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// Stricter rate limiting for write operations
+const writeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 30, // Limit each IP to 30 write requests per window
+  message: { error: 'Too many requests, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(limiter); // Apply rate limiting to all requests
 
 // ============ GITHUB DATA HELPERS ============
 
@@ -113,7 +142,7 @@ app.get('/api/index', async (req, res) => {
 // ============ USER ROUTES ============
 
 // Register new user
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', writeLimiter, async (req, res) => {
   try {
     const { username, password, email } = req.body;
     
@@ -167,7 +196,7 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 // Login user
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', writeLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
 
@@ -228,7 +257,7 @@ app.get('/api/u/:username', async (req, res) => {
 // ============ COMMUNITY ROUTES ============
 
 // Create community (subreddit)
-app.post('/api/r', async (req, res) => {
+app.post('/api/r', writeLimiter, async (req, res) => {
   try {
     const { name, description, creator } = req.body;
 
@@ -238,6 +267,15 @@ app.post('/api/r', async (req, res) => {
 
     const { content: index, sha: indexSha } = await getIndex();
     const communityName = name.toLowerCase().replace(/[^a-z0-9_]/g, '');
+
+    // Validate sanitized community name
+    if (communityName.length < 3) {
+      return res.status(400).json({ error: 'Community name must be at least 3 characters after sanitization (only letters, numbers, and underscores allowed)' });
+    }
+
+    if (communityName.length > 21) {
+      return res.status(400).json({ error: 'Community name cannot exceed 21 characters' });
+    }
 
     if (index.communities[communityName]) {
       return res.status(400).json({ error: 'Community already exists' });
@@ -326,7 +364,7 @@ app.get('/api/communities', async (req, res) => {
 });
 
 // Join community
-app.post('/api/r/:community/join', async (req, res) => {
+app.post('/api/r/:community/join', writeLimiter, async (req, res) => {
   try {
     const { community } = req.params;
     const { username } = req.body;
@@ -363,7 +401,7 @@ app.post('/api/r/:community/join', async (req, res) => {
 // ============ POST ROUTES ============
 
 // Create post
-app.post('/api/r/:community/posts', async (req, res) => {
+app.post('/api/r/:community/posts', writeLimiter, async (req, res) => {
   try {
     const { community } = req.params;
     const { title, content, author, type = 'text' } = req.body;
@@ -379,7 +417,9 @@ app.post('/api/r/:community/posts', async (req, res) => {
     }
 
     const postId = uuidv4();
-    const postSlug = title.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 50);
+    // Add short unique suffix to slug to prevent duplicates
+    const slugBase = title.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40);
+    const postSlug = `${slugBase}_${postId.slice(0, 8)}`;
     const postData = {
       id: postId,
       slug: postSlug,
@@ -530,7 +570,7 @@ app.get('/api/posts', async (req, res) => {
 });
 
 // Vote on post
-app.post('/api/posts/:postId/vote', async (req, res) => {
+app.post('/api/posts/:postId/vote', writeLimiter, async (req, res) => {
   try {
     const { postId } = req.params;
     const { username, vote } = req.body; // vote: 1 (upvote), -1 (downvote), 0 (remove vote)
@@ -572,7 +612,7 @@ app.post('/api/posts/:postId/vote', async (req, res) => {
 // ============ COMMENT ROUTES ============
 
 // Add comment to post
-app.post('/api/posts/:postId/comments', async (req, res) => {
+app.post('/api/posts/:postId/comments', writeLimiter, async (req, res) => {
   try {
     const { postId } = req.params;
     const { content, author, parentId = null } = req.body;
@@ -604,21 +644,29 @@ app.post('/api/posts/:postId/comments', async (req, res) => {
       replies: []
     };
 
+    const MAX_NESTING_DEPTH = 10;
+
     if (parentId) {
-      // Find parent comment and add reply
-      function addReply(comments) {
+      // Find parent comment and add reply with depth limit
+      function addReply(comments, depth = 0) {
+        if (depth > MAX_NESTING_DEPTH) {
+          return false;
+        }
         for (const c of comments) {
           if (c.id === parentId) {
             c.replies.push(comment);
             return true;
           }
-          if (c.replies && addReply(c.replies)) {
+          if (c.replies && c.replies.length > 0 && addReply(c.replies, depth + 1)) {
             return true;
           }
         }
         return false;
       }
-      addReply(postData.comments);
+      const found = addReply(postData.comments);
+      if (!found) {
+        return res.status(404).json({ error: 'Parent comment not found or max nesting depth exceeded' });
+      }
     } else {
       postData.comments.push(comment);
     }

@@ -2,18 +2,43 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 
 const AuthContext = createContext(null);
 
+// Session expiration time (24 hours in milliseconds)
+const SESSION_EXPIRY = 24 * 60 * 60 * 1000;
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check for saved user in localStorage
-    const savedUser = localStorage.getItem('unipost_user');
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
+    // Check for saved user in localStorage with expiration validation
+    try {
+      const savedSession = localStorage.getItem('unipost_session');
+      if (savedSession) {
+        const session = JSON.parse(savedSession);
+        const now = Date.now();
+        
+        // Validate session hasn't expired
+        if (session.expiresAt && session.expiresAt > now && session.user) {
+          setUser(session.user);
+        } else {
+          // Clear expired session
+          localStorage.removeItem('unipost_session');
+        }
+      }
+    } catch (error) {
+      // Clear invalid session data
+      localStorage.removeItem('unipost_session');
     }
     setLoading(false);
   }, []);
+
+  const saveSession = (userData) => {
+    const session = {
+      user: userData,
+      expiresAt: Date.now() + SESSION_EXPIRY
+    };
+    localStorage.setItem('unipost_session', JSON.stringify(session));
+  };
 
   const login = async (username, password) => {
     const response = await fetch('/api/auth/login', {
@@ -29,7 +54,7 @@ export function AuthProvider({ children }) {
 
     const data = await response.json();
     setUser(data.user);
-    localStorage.setItem('unipost_user', JSON.stringify(data.user));
+    saveSession(data.user);
     return data.user;
   };
 
@@ -47,13 +72,13 @@ export function AuthProvider({ children }) {
 
     const data = await response.json();
     setUser(data.user);
-    localStorage.setItem('unipost_user', JSON.stringify(data.user));
+    saveSession(data.user);
     return data.user;
   };
 
   const logout = () => {
     setUser(null);
-    localStorage.removeItem('unipost_user');
+    localStorage.removeItem('unipost_session');
   };
 
   return (
