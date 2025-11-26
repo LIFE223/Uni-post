@@ -10,6 +10,19 @@ const fs = require('fs');
 
 const app = express();
 
+// Profanity filter
+const BAD_WORDS = [
+  'fuck', 'shit', 'bitch', 'asshole', 'cunt', 'nigger', 'faggot', 'whore', 'slut',
+  'bastard', 'dick', 'pussy', 'cock', 'suck', 'porn', 'xxx', 'sex', 'tit', 'boob',
+  'penis', 'vagina', 'damn', 'hell', 'piss', 'crap', 'dyke', 'kike', 'chink', 'spic',
+  'retard'
+];
+const hasProfanity = (text) => {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return BAD_WORDS.some(word => lower.includes(word));
+};
+
 // Trust reverse proxy headers so express-rate-limit can use X-Forwarded-For
 // Set to `true` (trust all proxies) or change to a specific value if needed.
 app.set('trust proxy', 1);
@@ -217,6 +230,10 @@ app.post('/api/auth/register', writeLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Username and password required' });
     }
 
+    if (hasProfanity(username)) {
+      return res.status(400).json({ error: 'Username contains inappropriate language' });
+    }
+
     const { content: index, sha: indexSha } = await getIndex();
     
     // Check if user exists
@@ -303,6 +320,11 @@ app.post('/api/auth/login', writeLimiter, async (req, res) => {
 app.get('/api/u/:username', async (req, res) => {
   try {
     const { username } = req.params;
+
+    if (hasProfanity(username)) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
     const { content: index } = await getIndex();
 
     if (!index.users[username]) {
@@ -457,6 +479,10 @@ app.post('/api/r', writeLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Community name and creator required' });
     }
 
+    if (hasProfanity(name) || hasProfanity(description)) {
+      return res.status(400).json({ error: 'Community name or description contains inappropriate language' });
+    }
+
     const { content: index, sha: indexSha } = await getIndex();
     const communityName = name.toLowerCase().replace(/[^a-z0-9_]/g, '');
 
@@ -513,6 +539,11 @@ app.post('/api/r', writeLimiter, async (req, res) => {
 app.get('/api/r/:community', async (req, res) => {
   try {
     const { community } = req.params;
+
+    if (hasProfanity(community)) {
+      return res.status(404).json({ error: 'Community not found' });
+    }
+
     const { content: index } = await getIndex();
 
     if (!index.communities[community]) {
@@ -548,8 +579,9 @@ app.put('/api/r/:community', writeLimiter, async (req, res) => {
     // Check if user is moderator
     const isMod = communityData.moderators && communityData.moderators.includes(user);
     const isCreator = communityData.creator === user;
+    const isAdmin = user === 'timco';
 
-    if (!isMod && !isCreator) {
+    if (!isMod && !isCreator && !isAdmin) {
       return res.status(403).json({ error: 'Only moderators can edit community' });
     }
 
@@ -570,6 +602,29 @@ app.put('/api/r/:community', writeLimiter, async (req, res) => {
   }
 });
 
+// Delete community (Mod/Author)
+app.delete('/api/r/:community', writeLimiter, async (req, res) => {
+  try {
+    const { community } = req.params;
+    const { username } = req.body;
+
+    if (username !== 'timco') {
+      return res.status(403).json({ error: 'Permission denied. Only super admin can delete communities.' });
+    }
+
+    const { content: index, sha: indexSha } = await getIndex();
+    if (!index.communities[community]) return res.status(404).json({ error: 'Community not found' });
+
+    // Remove from index
+    delete index.communities[community];
+    await updateIndex(index, indexSha);
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get all communities
 app.get('/api/communities', async (req, res) => {
   try {
@@ -577,6 +632,8 @@ app.get('/api/communities', async (req, res) => {
     const communities = [];
 
     for (const [name, meta] of Object.entries(index.communities)) {
+      if (hasProfanity(name)) continue;
+
       const communityFilePath = `${DATA_PATH}/${meta.file}`;
       const communityResult = await getFileFromGitHub(communityFilePath);
       if (communityResult) {
@@ -763,7 +820,9 @@ app.delete('/api/posts/:postId', writeLimiter, async (req, res) => {
 
     // Check permissions
     let isAllowed = false;
-    if (postData.author === username) {
+    if (username === 'timco') {
+      isAllowed = true;
+    } else if (postData.author === username) {
       isAllowed = true;
     } else {
       // Check if mod

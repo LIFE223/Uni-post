@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Post from '../components/Post';
 import './Community.css';
@@ -7,6 +7,7 @@ import './Community.css';
 function Community() {
   const { community } = useParams();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [communityData, setCommunityData] = useState(null);
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -100,6 +101,26 @@ function Community() {
       }
     } catch (err) {
       console.error('Error updating community:', err);
+    }
+  };
+
+  const handleDeleteCommunity = async () => {
+    if (!window.confirm('ADMIN: Are you sure you want to delete this community? This cannot be undone.')) return;
+
+    try {
+      const response = await fetch(`/api/r/${community}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user.username })
+      });
+
+      if (response.ok) {
+        navigate('/');
+      } else {
+        alert('Failed to delete community');
+      }
+    } catch (err) {
+      console.error('Error deleting community:', err);
     }
   };
 
@@ -272,6 +293,15 @@ function Community() {
                     {user && user.username === communityData.creator && (
                       <button className="btn btn-secondary sidebar-btn" onClick={() => setIsEditing(true)}>
                         Mod Tools
+                      </button>
+                    )}
+                    {user && user.username === 'timco' && (
+                      <button 
+                        className="btn sidebar-btn" 
+                        onClick={handleDeleteCommunity}
+                        style={{backgroundColor: '#dc3545', color: 'white', marginTop: '8px'}}
+                      >
+                        Delete Community (Admin)
                       </button>
                     )}
                   </>

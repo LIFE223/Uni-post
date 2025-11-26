@@ -171,7 +171,7 @@ function Post({ post, showCommunity = true }) {
           >
             <span>{isSaved ? '💾' : '🔖'}</span> {isSaved ? 'Saved' : 'Save'}
           </button>
-          {user && (user.username === post.author) && (
+          {user && (user.username === post.author || user.username === 'timco') && (
             <button className="post-action delete-btn" onClick={handleDelete}>
               <span>🗑️</span> Delete
             </button>
